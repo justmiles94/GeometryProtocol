@@ -1,7 +1,0 @@
-all: client server
-client:
-	gcc -lm -lpthread -w -o client.o client.c
-server:
-	gcc -lm -lpthread -w -o server.o server.c
-clean:
-	rm -f *.o

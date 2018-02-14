@@ -1,124 +1,213 @@
-//server
+/*
+** server.c -- a stream socket server demo
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
 #include <netdb.h>
-#include <errno.h>
-#include <math.h>
+#include <arpa/inet.h>
+#include <sys/wait.h>
+#include <signal.h>
+#include <pthread.h>
 
-int MESSAGE_LENGTH = 100;
-int success, bytesReceived;
-struct addrinfo hints, *serverData;
-char *receivedMessage;
-struct sockaddr_storage stored;
+void sigchld_handler(int s)
+{
+	(void)s; // quiet unused variable warning
 
-int main(int argc, char* argv[]) {
+	// waitpid() might overwrite errno, so we save and restore it:
+	int saved_errno = errno;
 
-	if(argc < 3) {
-		fprintf(stderr, "Must supply IPaddress and port\n");
+	while(waitpid(-1, NULL, WNOHANG) > 0);
+
+	errno = saved_errno;
+}
+
+
+// get sockaddr, IPv4 or IPv6:
+void *get_in_addr(struct sockaddr *sa)
+{
+	if (sa->sa_family == AF_INET) {
+		return &(((struct sockaddr_in*)sa)->sin_addr);
+	}
+
+	return &(((struct sockaddr_in6*)sa)->sin6_addr);
+}
+
+int main(int argc, char* argv[])
+{
+	if(argc != 3 || strcmp(argv[1], argv[2]) == 0){
+		puts("2 arguments must be given and they cannot be the same.");
 		exit(1);
 	}
-	char* udp = argv[1];
-	char* tcp = argv[2];
+	pthread_t tcpThread, udpThread;
+	pthread_create(&tcpThread, NULL, tcp, argv[1]);
+	pthread_create(&udpThread, NULL, udp, argv[2]);
+	pthread_join(&tcpThread, NULL);
+	pthread_join(&udpThread, NULL);
+	return 0;
+}
+int udp(void* MYPORT)
+{
+	int MAXBUFLEN = 100;
+	int sockfd;
+	struct addrinfo hints, *servinfo, *p;
+	int rv;
+	int numbytes;
+	struct sockaddr_storage their_addr;
+	char buf[MAXBUFLEN];
+	socklen_t addr_len;
+	char s[INET6_ADDRSTRLEN];
+
+	memset(&hints, 0, sizeof hints);
+	hints.ai_family = AF_UNSPEC; // set to AF_INET to force IPv4
+	hints.ai_socktype = SOCK_DGRAM;
+	hints.ai_flags = AI_PASSIVE; // use my IP
+
+	if ((rv = getaddrinfo(NULL, (char*)MYPORT, &hints, &servinfo)) != 0) {
+		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+		return 1;
+	}
+
+	// loop through all the results and bind to the first we can
+	for(p = servinfo; p != NULL; p = p->ai_next) {
+		if ((sockfd = socket(p->ai_family, p->ai_socktype,
+				p->ai_protocol)) == -1) {
+			perror("listener: socket");
+			continue;
+		}
+
+		if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
+			close(sockfd);
+			perror("listener: bind");
+			continue;
+		}
+
+		break;
+	}
+
+	if (p == NULL) {
+		fprintf(stderr, "listener: failed to bind socket\n");
+		return 2;
+	}
+
+	freeaddrinfo(servinfo);
+
+	printf("listener: waiting to recvfrom...\n");
+
+	addr_len = sizeof their_addr;
+	if ((numbytes = recvfrom(sockfd, buf, MAXBUFLEN-1 , 0,
+		(struct sockaddr *)&their_addr, &addr_len)) == -1) {
+		perror("recvfrom");
+		exit(1);
+	}
+
+	printf("listener: got packet from %s\n",
+		inet_ntop(their_addr.ss_family,
+			get_in_addr((struct sockaddr *)&their_addr),
+			s, sizeof s));
+	printf("listener: packet is %d bytes long\n", numbytes);
+	buf[numbytes] = '\0';
+	printf("listener: packet contains \"%s\"\n", buf);
+
+	close(sockfd);
+
+	return 0;
+}
+int tcp(void* PORT){
+	int BACKLOG = 10;
+	int sockfd, new_fd;  // listen on sock_fd, new connection on new_fd
+	struct addrinfo hints, *servinfo, *p;
+	struct sockaddr_storage their_addr; // connector's address information
+	socklen_t sin_size;
+	struct sigaction sa;
+	int yes=1;
+	char s[INET6_ADDRSTRLEN];
+	int rv;
+
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_flags = AI_PASSIVE;
-	int acceptedAddrSize = sizeof stored;
+	hints.ai_flags = AI_PASSIVE; // use my IP
 
-	//server setup
-	puts(tcp);
-	int socketDescriptor = getConnectedSocketDescriptor(tcp);
-
-//	//accept connection
-//	int acceptedDescriptor = accept(socketDescriptor, (struct sockaddr *) &stored, &acceptedAddrSize);
-//
-//	//send message
-//	sendMessage(acceptedDescriptor, "Connection created!\n");
-//
-//	//read message
-//	bytesReceived = readMessage(acceptedDescriptor, receivedMessage, MESSAGE_LENGTH);
-//
-//	//print message
-//	puts(&receivedMessage);
-//	puts(receivedMessage);
-
-	//close connection
-//	close(acceptedDescriptor);
-	close(socketDescriptor);
-}
-int getConnectedSocketDescriptor(char* tcp){
-	//null in place of ip or port chooses the localhost and a random port
-	puts(tcp);
-	if((success = getaddrinfo(NULL, tcp, &hints, &serverData)) != 0) {
-		fprintf(stderr, "GETADDRINFO: %s\n", strerror(success));
-		exit(1);
+	if ((rv = getaddrinfo(NULL, (char*)PORT, &hints, &servinfo)) != 0) {
+		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+		return 1;
 	}
-	struct addrinfo *index, *firstFullServerData;
-	for(index = serverData; index != NULL; index = index->ai_next){
-		if(serverData->ai_family != NULL && serverData->ai_socktype != NULL && serverData->ai_protocol != NULL){
-			firstFullServerData = index;
+
+	// loop through all the results and bind to the first we can
+	for(p = servinfo; p != NULL; p = p->ai_next) {
+		if ((sockfd = socket(p->ai_family, p->ai_socktype,
+				p->ai_protocol)) == -1) {
+			perror("server: socket");
+			continue;
 		}
-	}
-	freeaddrinfo(index);
 
-	if(firstFullServerData == NULL){
-		fprintf(stderr, "NULLADDRINFO: %s\n", strerror(errno));
-		exit(1);
-	}
-	int socketDescriptor = socket(serverData->ai_family, serverData->ai_socktype, serverData->ai_protocol);
-	if(socketDescriptor == -1){
-		fprintf(stderr, "SOCKET: %s\n", strerror(errno));
-		exit(1);
-	}
-	freeaddrinfo(serverData);
-	int AFFIRM = 1;
-	if(setsockopt(socketDescriptor, SOL_SOCKET, SO_REUSEADDR, &AFFIRM, sizeof AFFIRM) == -1){
-		fprintf(stderr, "SETSOCK will continue: %s\n", strerror(errno));
-	}
-	if(bind(socketDescriptor, serverData->ai_addr, serverData->ai_addrlen)){
-		fprintf(stderr, "BIND: %s\n", strerror(errno));
-		exit(1);
-	}
-	if(listen(socketDescriptor, 10) != -1){
-		fprintf(stderr, "Error listening to socket: %d", errno);
-	}
-	return socketDescriptor;
-}
-int readMessage(int socketDescriptor, void *buffer, int bufferLen){
-	int bytesReceived;
-	if(bytesReceived = recv(socketDescriptor, buffer, bufferLen, 0) == -1){
-		fprintf(stderr, "Error reading new message: %d", errno);
-	}
-	return bytesReceived;
-}
-int sendMessage(int socketDescriptor, char* message){
-	int messageLen = strlen(message);
-	int bytesSent;
-	while(bytesSent < messageLen){
-		if(bytesSent = send(socketDescriptor, message, messageLen, 0) != -1){
-			fprintf(stderr, "Error sending message: %d", errno);
+		if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes,
+				sizeof(int)) == -1) {
+			perror("setsockopt");
+			exit(1);
 		}
+
+		if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
+			close(sockfd);
+			perror("server: bind");
+			continue;
+		}
+
+		break;
 	}
-	return bytesSent;
+
+	freeaddrinfo(servinfo); // all done with this structure
+
+	if (p == NULL)  {
+		fprintf(stderr, "server: failed to bind\n");
+		exit(1);
+	}
+
+	if (listen(sockfd, BACKLOG) == -1) {
+		perror("listen");
+		exit(1);
+	}
+
+	sa.sa_handler = sigchld_handler; // reap all dead processes
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = SA_RESTART;
+	if (sigaction(SIGCHLD, &sa, NULL) == -1) {
+		perror("sigaction");
+		exit(1);
+	}
+
+	printf("server: waiting for connections...\n");
+
+	while(1) {  // main accept() loop
+		sin_size = sizeof their_addr;
+		new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
+		if (new_fd == -1) {
+			perror("accept");
+			continue;
+		}
+
+		inet_ntop(their_addr.ss_family,
+			get_in_addr((struct sockaddr *)&their_addr),
+			s, sizeof s);
+		printf("server: got connection from %s\n", s);
+
+		if (!fork()) { // this is the child process
+			close(sockfd); // child doesn't need the listener
+			if (send(new_fd, "Hello, world!", 13, 0) == -1)
+				perror("send");
+			close(new_fd);
+			exit(0);
+		}
+		close(new_fd);  // parent doesn't need this
+	}
+
+	return 0;
 }
 
-double calculateCircleArea(double radius){
-	return M_PI*pow(radius, 2);
-}
-double calculateCircleCircumference(double area){
-	return M_PI*2*sqrt(area/M_PI);
-}
-double calculateSphereVolume(double radius){
-	return 4*M_PI*pow(radius, 3)/3;
-}
-double calculateSphereRadius(double area){
-	return sqrt(area/M_PI)/2;
-}
-double calculateCylinderSurface(double radius, double height){
-	return 2*M_PI*radius*height + 2*M_PI*pow(radius, 2);
-}
-double calculateCylinerHeight(double volume, double radius){
-	return volume/(M_PI*pow(radius, 2));
-}

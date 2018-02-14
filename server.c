@@ -1,6 +1,6 @@
 /*
-** server.c -- a stream socket server demo
-*/
+ ** server.c -- a stream socket server demo
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,45 +15,47 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <pthread.h>
+#include <math.h>
 
-void sigchld_handler(int s)
-{
-	(void)s; // quiet unused variable warning
+double calculateCircleArea(double radius) {
+	return M_PI * pow(radius, 2);
+}
+double calculateCircleCircumference(double area) {
+	return M_PI * 2 * sqrt(area / M_PI);
+}
+double calculateSphereVolume(double radius) {
+	return 4 * M_PI * pow(radius, 3) / 3;
+}
+double calculateSphereRadius(double area) {
+	return sqrt(area / M_PI) / 2;
+}
+double calculateCylinderSurface(double radius, double height) {
+	return 2 * M_PI * radius * height + 2 * M_PI * pow(radius, 2);
+}
+double calculateCylinerHeight(double volume, double radius) {
+	return volume / (M_PI * pow(radius, 2));
+}
+void sigchld_handler(int s) {
+	(void) s; // quiet unused variable warning
 
 	// waitpid() might overwrite errno, so we save and restore it:
 	int saved_errno = errno;
 
-	while(waitpid(-1, NULL, WNOHANG) > 0);
+	while (waitpid(-1, NULL, WNOHANG) > 0)
+		;
 
 	errno = saved_errno;
 }
 
-
 // get sockaddr, IPv4 or IPv6:
-void *get_in_addr(struct sockaddr *sa)
-{
+void *get_in_addr(struct sockaddr *sa) {
 	if (sa->sa_family == AF_INET) {
-		return &(((struct sockaddr_in*)sa)->sin_addr);
+		return &(((struct sockaddr_in*) sa)->sin_addr);
 	}
 
-	return &(((struct sockaddr_in6*)sa)->sin6_addr);
+	return &(((struct sockaddr_in6*) sa)->sin6_addr);
 }
-
-int main(int argc, char* argv[])
-{
-	if(argc != 3 || strcmp(argv[1], argv[2]) == 0){
-		puts("2 arguments must be given and they cannot be the same.");
-		exit(1);
-	}
-	pthread_t tcpThread, udpThread;
-	pthread_create(&tcpThread, NULL, tcp, argv[1]);
-	pthread_create(&udpThread, NULL, udp, argv[2]);
-	pthread_join(&tcpThread, NULL);
-	pthread_join(&udpThread, NULL);
-	return 0;
-}
-int udp(void* MYPORT)
-{
+int udp(void* MYPORT) {
 	int MAXBUFLEN = 100;
 	int sockfd;
 	struct addrinfo hints, *servinfo, *p;
@@ -69,15 +71,15 @@ int udp(void* MYPORT)
 	hints.ai_socktype = SOCK_DGRAM;
 	hints.ai_flags = AI_PASSIVE; // use my IP
 
-	if ((rv = getaddrinfo(NULL, (char*)MYPORT, &hints, &servinfo)) != 0) {
+	if ((rv = getaddrinfo(NULL, (char*) MYPORT, &hints, &servinfo)) != 0) {
 		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
 		return 1;
 	}
 
 	// loop through all the results and bind to the first we can
-	for(p = servinfo; p != NULL; p = p->ai_next) {
-		if ((sockfd = socket(p->ai_family, p->ai_socktype,
-				p->ai_protocol)) == -1) {
+	for (p = servinfo; p != NULL; p = p->ai_next) {
+		if ((sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol))
+				== -1) {
 			perror("listener: socket");
 			continue;
 		}
@@ -101,16 +103,28 @@ int udp(void* MYPORT)
 	printf("listener: waiting to recvfrom...\n");
 
 	addr_len = sizeof their_addr;
-	if ((numbytes = recvfrom(sockfd, buf, MAXBUFLEN-1 , 0,
-		(struct sockaddr *)&their_addr, &addr_len)) == -1) {
-		perror("recvfrom");
-		exit(1);
+	char *childIp = "";
+	close(sockfd); // child doesn't need the listener
+	int state = 0;
+	while (state == 0) {
+		if ((numbytes = recvfrom(sockfd, buf, MAXBUFLEN - 1, 0, (struct sockaddr *) &their_addr, &addr_len)) == -1) {
+			perror("recvfrom");
+			exit(1);
+		}
+		if (buf != NULL) {
+			state = parseMessage(&buf, &childIp, state);
+		}else{
+			sprintf(&buf, "200 BYE %s(TCP)", childIp);
+			state = 0;
+		}
+		if ((numbytes = sendto(sockfd, buf, MAXBUFLEN - 1, 0, (struct sockaddr *) &their_addr, &addr_len)) == -1) {
+			perror("recvfrom");
+			exit(1);
+		}
 	}
-
 	printf("listener: got packet from %s\n",
-		inet_ntop(their_addr.ss_family,
-			get_in_addr((struct sockaddr *)&their_addr),
-			s, sizeof s));
+			inet_ntop(their_addr.ss_family,
+					get_in_addr((struct sockaddr *) &their_addr), s, sizeof s));
 	printf("listener: packet is %d bytes long\n", numbytes);
 	buf[numbytes] = '\0';
 	printf("listener: packet contains \"%s\"\n", buf);
@@ -119,14 +133,14 @@ int udp(void* MYPORT)
 
 	return 0;
 }
-int tcp(void* PORT){
+int tcp(void* PORT) {
 	int BACKLOG = 10;
-	int sockfd, new_fd;  // listen on sock_fd, new connection on new_fd
+	int sockfd, new_fd; // listen on sock_fd, new connection on new_fd
 	struct addrinfo hints, *servinfo, *p;
 	struct sockaddr_storage their_addr; // connector's address information
 	socklen_t sin_size;
 	struct sigaction sa;
-	int yes=1;
+	int yes = 1;
 	char s[INET6_ADDRSTRLEN];
 	int rv;
 
@@ -135,21 +149,21 @@ int tcp(void* PORT){
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_flags = AI_PASSIVE; // use my IP
 
-	if ((rv = getaddrinfo(NULL, (char*)PORT, &hints, &servinfo)) != 0) {
+	if ((rv = getaddrinfo(NULL, (char*) PORT, &hints, &servinfo)) != 0) {
 		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
 		return 1;
 	}
 
 	// loop through all the results and bind to the first we can
-	for(p = servinfo; p != NULL; p = p->ai_next) {
-		if ((sockfd = socket(p->ai_family, p->ai_socktype,
-				p->ai_protocol)) == -1) {
+	for (p = servinfo; p != NULL; p = p->ai_next) {
+		if ((sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol))
+				== -1) {
 			perror("server: socket");
 			continue;
 		}
 
-		if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes,
-				sizeof(int)) == -1) {
+		if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int))
+				== -1) {
 			perror("setsockopt");
 			exit(1);
 		}
@@ -165,7 +179,7 @@ int tcp(void* PORT){
 
 	freeaddrinfo(servinfo); // all done with this structure
 
-	if (p == NULL)  {
+	if (p == NULL) {
 		fprintf(stderr, "server: failed to bind\n");
 		exit(1);
 	}
@@ -185,29 +199,123 @@ int tcp(void* PORT){
 
 	printf("server: waiting for connections...\n");
 
-	while(1) {  // main accept() loop
+	while (1) { // main accept() loop
 		sin_size = sizeof their_addr;
-		new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
+		new_fd = accept(sockfd, (struct sockaddr *) &their_addr, &sin_size);
 		if (new_fd == -1) {
 			perror("accept");
 			continue;
 		}
 
 		inet_ntop(their_addr.ss_family,
-			get_in_addr((struct sockaddr *)&their_addr),
-			s, sizeof s);
+				get_in_addr((struct sockaddr *) &their_addr), s, sizeof s);
 		printf("server: got connection from %s\n", s);
 
 		if (!fork()) { // this is the child process
+			char *childIp = s;
 			close(sockfd); // child doesn't need the listener
-			if (send(new_fd, "Hello, world!", 13, 0) == -1)
-				perror("send");
+			char* message;
+			int state = 0;
+			while (state == 0) {
+				if (recv(new_fd, &message, 100, 0) == -1)
+					perror("recv");
+				if (message != NULL) {
+					state = parseMessage(&message, &childIp, state);
+				}else{
+					sprintf(&message, "200 BYE %s(TCP)", childIp);
+					state = 0;
+				}
+				if (send(new_fd, &message, 100, 0) == -1)
+					perror("send");
+			}
 			close(new_fd);
 			exit(0);
 		}
-		close(new_fd);  // parent doesn't need this
+		close(new_fd); // parent doesn't need this
 	}
 
 	return 0;
 }
+enum SHAPE { CYLINDER = 6, CIRCLE = 7, SPHERE = 8 };
+int parseMessage(char* message, char* IP, int shape) {
+	char* value;
+	if ((value = strsep(&message, " ")) == "HELO") {
+		sprintf(&message, "HELO %s(TCP)", IP);
+		return shape;
+	} else if ((value = strsep(&message, " ")) == "HELO") {
+		sprintf(&message,
+				"Help can be found be referncing the server documentation");
+		return shape;
+	} else if (strcmp(&message, "CYLINDER") == 0) {
+		return CYLINDER;
+	} else if (strcmp(&message, "CIRCLE") == 0) {
+		return CIRCLE;
+	} else if (strcmp(&message, "SPHERE") == 0) {
+		return SPHERE;
+	} else {
+		char* cmd;
+		double params[2] = {-1, -1};
+		int count = 0;
+		char* value;
+		while ((value = strsep(&message, " ")) != NULL) {
+			switch (count) {
+			case 0:
+				cmd = &value;
+				break;
+			case 1:
+				params[0] = atof(&value);
+				break;
+			case 2:
+				params[1] = atof(&value);
+			}
+		}
+		if(params[1] == -1){
+			if(shape == CIRCLE){//circle
+				if(strcmp(&cmd, "AREA") == 0 ){
+					sprintf(&message, "250 %f", calculateCircleArea(params[0]));
+				}else if(strcmp(&cmd, "CIRC") == 0){
+					sprintf(&message, "250 %f", calculateCircleCircumference(params[0]));
+				}else{
+					sprintf(&message, "Syntax error command unrecognized");
+				}
+			}else if(shape == SPHERE){//sphere
+				if(strcmp(&cmd, "VOL") == 0){
+					sprintf(&message, "250 %f", calculateSphereVolume(params[0]));
+				}else if(strcmp(&cmd, "RAD") == 0){
+					sprintf(&message, "250 %f", calculateSphereRadius(params[0]));
+				}else{
+					sprintf(&message, "Syntax error command unrecognized");
+				}
+			}else{
+				sprintf(&message, "Syntax error command unrecognized");
+			}
+		}else{
+			if(shape == CYLINDER){//cylinder
+				if(strcmp(&cmd, "AREA") == 0){
+					sprintf(&message, "250 %f", calculateCylinderSurface(params[0], params[1]));
+				}else if(strcmp(&cmd, "HGT") == 0){
+					sprintf(&message, "250 %f", calculateCylinerHeight(params[0], params[1]));
+				}else{
+					sprintf(&message, "Syntax error command unrecognized");
+				}
+			}else{
+				sprintf(&message, "Syntax error command unrecognized");
+			}
+		}
+	}
+	sprintf(&message, "Syntax error: unknown");
+	return 0;
+}
 
+int main(int argc, char* argv[]) {
+	if (argc != 3 || strcmp(argv[1], argv[2]) == 0) {
+		puts("2 arguments must be given and they cannot be the same.");
+		exit(1);
+	}
+	pthread_t tcpThread, udpThread;
+	pthread_create(&tcpThread, NULL, tcp, argv[1]);
+	pthread_create(&udpThread, NULL, udp, argv[2]);
+	pthread_join(&tcpThread, NULL);
+	pthread_join(&udpThread, NULL);
+	return 0;
+}
